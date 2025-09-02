@@ -26,10 +26,10 @@ dependencies {
     compile  group: 'com.fasterxml.jackson.core', name: 'jackson-databind', version:'2.13.1'
     compile  group: 'com.fasterxml.jackson.dataformat', name: 'jackson-dataformat-yaml', version: '2.13.1'
 
-    // Prometheus
-    compile group: 'io.prometheus', name: 'simpleclient', version: '0.14.1'
-    compile group: 'io.prometheus', name: 'simpleclient_common', version: '0.14.1'
-    compile group: 'io.prometheus', name: 'simpleclient_httpserver', version: '0.14.1'
+    // Prometheus - New client library (should fix trailing comma issue)
+    implementation 'io.prometheus:prometheus-metrics-core:1.4.1'
+    implementation 'io.prometheus:prometheus-metrics-exporter-common:1.4.1'
+    implementation 'io.prometheus:prometheus-metrics-exporter-httpserver:1.4.1'
 }
 
 // If you don't use the uber jar
@@ -42,9 +42,10 @@ jar {
 // In order to get maven shade equivalent plugin (Uber Jar)
 buildscript {
     repositories {
-        jcenter()
+        gradlePluginPortal()
+        mavenCentral()
     }
     dependencies {
-        classpath 'com.github.jengelman.gradle.plugins:shadow:4.0.3'
+        classpath 'com.github.jengelman.gradle.plugins:shadow:6.1.0'
     }
 }

@@ -1,3 +1,4 @@
 .gradle/
 .idea/
 cassandra_exporter.iml
+build/

@@ -1,7 +1,7 @@
 package com.criteo.nosql.cassandra.exporter;
 
-import io.prometheus.client.Collector;
-import io.prometheus.client.Gauge;
+import io.prometheus.metrics.core.metrics.Gauge;
+import io.prometheus.metrics.model.registry.PrometheusRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -48,7 +48,7 @@ public class JmxScraper {
         String[] additionalLabelKeys = additionalLabels.keySet().stream().toArray(String[]::new);
         this.additionalLabelValues = additionalLabels.values().stream().toArray(String[]::new);
 
-        this.stats = Gauge.build()
+        this.stats = Gauge.builder()
                 .name("cassandra_stats")
                 .help("node stats")
                 .labelNames(concat(new String[]{"cluster", "datacenter", "keyspace", "table", "name"}, additionalLabelKeys))
@@ -105,14 +105,20 @@ public class JmxScraper {
     }
 
     private void updateStats(NodeInfo nodeInfo, String metricName, Double value) {
+        // Handle extreme scientific notation values
+        double actualValue = value;
+        if (isExtremelySmall(value)) {
+            actualValue = 0.0;  // Convert E-100+ values to clean 0.0
+        }
 
         if (metricName.startsWith("org:apache:cassandra:metrics:keyspace:")) {
             int pathLength = "org:apache:cassandra:metrics:keyspace:".length();
             int pos = metricName.indexOf(':', pathLength);
             String keyspaceName = metricName.substring(pathLength, pos);
 
-            this.stats.labels(concat(new String[] {nodeInfo.clusterName, nodeInfo.datacenterName,
-                    nodeInfo.keyspaces.contains(keyspaceName) ? keyspaceName : "", "", metricName}, this.additionalLabelValues)).set(value);
+            String[] labelValues = concat(new String[] {nodeInfo.clusterName, nodeInfo.datacenterName,
+                    nodeInfo.keyspaces.contains(keyspaceName) ? keyspaceName : "", "", metricName}, this.additionalLabelValues);
+            this.stats.labelValues(labelValues).set(actualValue);
             return;
         }
 
@@ -125,7 +131,8 @@ public class JmxScraper {
             String tableName = tablePos > 0 ? metricName.substring(keyspacePos + 1, tablePos) : "";
 
             if (nodeInfo.keyspaces.contains(keyspaceName) && nodeInfo.tables.contains(tableName)) {
-                this.stats.labels(concat(new String[] {nodeInfo.clusterName, nodeInfo.datacenterName, keyspaceName, tableName, metricName}, additionalLabelValues)).set(value);
+                String[] labelValues = concat(new String[] {nodeInfo.clusterName, nodeInfo.datacenterName, keyspaceName, tableName, metricName}, additionalLabelValues);
+                this.stats.labelValues(labelValues).set(actualValue);
                 return;
             }
         }
@@ -139,7 +146,8 @@ public class JmxScraper {
             String tableName = tablePos > 0 ? metricName.substring(keyspacePos + 1, tablePos) : "";
 
             if (nodeInfo.keyspaces.contains(keyspaceName) && nodeInfo.tables.contains(tableName)) {
-                this.stats.labels(concat(new String[] {nodeInfo.clusterName, nodeInfo.datacenterName, keyspaceName, tableName, metricName}, additionalLabelValues)).set(value);
+                String[] labelValues = concat(new String[] {nodeInfo.clusterName, nodeInfo.datacenterName, keyspaceName, tableName, metricName}, additionalLabelValues);
+                this.stats.labelValues(labelValues).set(actualValue);
                 return;
             }
         }
@@ -153,40 +161,27 @@ public class JmxScraper {
             String tableName = tablePos > 0 ? metricName.substring(keyspacePos + 1, tablePos) : "";
 
             if (nodeInfo.keyspaces.contains(keyspaceName) && nodeInfo.tables.contains(tableName)) {
-                this.stats.labels(concat(new String[]{nodeInfo.clusterName, nodeInfo.datacenterName, keyspaceName, tableName, metricName}, additionalLabelValues)).set(value);
+                String[] labelValues = concat(new String[]{nodeInfo.clusterName, nodeInfo.datacenterName, keyspaceName, tableName, metricName}, additionalLabelValues);
+                this.stats.labelValues(labelValues).set(actualValue);
                 return;
             }
         }
 
 
-        this.stats.labels(concat(new String[]{nodeInfo.clusterName, nodeInfo.datacenterName, "", "", metricName}, additionalLabelValues)).set(value);
-    }
-
-    private Boolean shouldRemove(NodeInfo nodeInfo, Collector.MetricFamilySamples.Sample sample) {
-        String keyspace = sample.labelValues.get(2);
-        String table = sample.labelValues.get(3);
-        return (!"".equals(keyspace) && !nodeInfo.keyspaces.contains(keyspace)) || (!"".equals(table) && !nodeInfo.tables.contains(table));
-    }
-
-
-    /**
-     * Remove metrics for drop keyspaces/tables
-     */
-    private void removeMetrics(NodeInfo nodeInfo) {
-        this.stats.collect()
-                .stream()
-                .flatMap(metrics -> metrics.samples.stream())
-                .filter(sample -> shouldRemove(nodeInfo, sample))
-                .forEach(sample -> this.stats.remove(sample.labelValues.toArray(new String[0])));
+        String[] labelValues = concat(new String[]{nodeInfo.clusterName, nodeInfo.datacenterName, "", "", metricName}, additionalLabelValues);
+                        this.stats.labelValues(labelValues).set(actualValue);
     }
 
     public void run(final boolean forever) throws Exception {
 
-        this.stats.clear();
         try (JMXConnector jmxc = JMXConnectorFactory.connect(new JMXServiceURL(jmxUrl), jmxEnv)) {
             final MBeanServerConnection beanConn = jmxc.getMBeanServerConnection();
 
             do {
+                // Clear all metrics at the beginning of each cycle to remove stale metrics
+                // from dropped keyspaces/tables (fixes issue #98)
+                this.stats.clear();
+                
                 final long now = System.currentTimeMillis();
 
                 // If we can't get the node info, exit the run early in order to avoid creating stale metrics
@@ -202,8 +197,6 @@ public class JmxScraper {
                         .flatMap(mBeanInfo -> toMBeanInfos(beanConn, mBeanInfo))
                         .filter(m -> shouldScrap(m, now))
                         .forEach(mBean -> updateMetric(beanConn, mBean, nodeInfo.get()));
-
-                removeMetrics(nodeInfo.get());
 
                 lastScrapes.forEach((k, lastScrape) -> {
                     if (now - lastScrape >= k) lastScrapes.put(k, now);
@@ -393,6 +386,17 @@ public class JmxScraper {
         T[] finalArray = Arrays.copyOf(a, a.length + b.length);
         System.arraycopy(b, 0, finalArray, a.length, b.length);
         return finalArray;
+    }
+
+    /**
+     * Check if a double value is extremely small (close to zero with high negative exponent).
+     * These values (like E-100+) can break Fluent Bit's Prometheus parser.
+     * 
+     * @param value the double value to check
+     * @return true if the value should be treated as zero
+     */
+    static boolean isExtremelySmall(Double value) {
+        return value != null && Math.abs(value) < 1E-50;  // Anything smaller than E-50 → 0.0
     }
 
     /**

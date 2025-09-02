@@ -1,6 +1,6 @@
 package com.criteo.nosql.cassandra.exporter;
 
-import io.prometheus.client.exporter.HTTPServer;
+import io.prometheus.metrics.exporter.httpserver.HTTPServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,7 +31,9 @@ public class Main {
     }
 
 	public static void start(Config cfg, boolean isOneShot) throws IOException, Exception {
-		HTTPServer server = new HTTPServer(cfg.getListenAddress(), cfg.getListenPort());
+		HTTPServer server = HTTPServer.builder()
+				.port(cfg.getListenPort())
+				.buildAndStart();
         JmxScraper scrapper = new JmxScraper(String.format("service:jmx:rmi:///jndi/rmi://%s/jmxrmi", cfg.getHost()), cfg.getUser(), cfg.getPassword(), cfg.getSSL(), cfg.getBlacklist(), cfg.getMaxScrapFrequencyInSec(), findAdditionalLabelsInEnvironment(System.getenv(), cfg.getAdditionalLabelsFromEnvvars()));
 
         if (isOneShot) {
